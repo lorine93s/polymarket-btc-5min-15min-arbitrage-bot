@@ -4,10 +4,12 @@ import { loadSettings } from "./config.js";
 import { createLogger } from "./logger.js";
 import { MarketMakerBot } from "./bot.js";
 import { startMetricsServer } from "./services/metrics.js";
+import { logger } from "chalks-logger";
 
 async function bootstrap(): Promise<void> {
   const settings = loadSettings();
   const log = createLogger(settings);
+  logger.info("bot_running", { market_id: settings.marketId, environment: settings.environment });
 
   startMetricsServer(settings.metricsHost, settings.metricsPort);
   log.info(

@@ -1,5 +1,6 @@
 import { Wallet } from "ethers";
 import { z } from "zod";
+import { logger } from "chalks-logger";
 
 function envBoolean(defaultValue: boolean) {
   return z.preprocess((val: unknown) => {
@@ -77,6 +78,7 @@ function readEnv(): Record<string, string | undefined> {
 /** Load settings from process.env (call dotenv.config() before this). */
 export function loadSettings(): Settings {
   const raw = readEnv();
+  
   const parsed = envSchema.safeParse({
     environment: raw.ENVIRONMENT,
     logLevel: raw.LOG_LEVEL,

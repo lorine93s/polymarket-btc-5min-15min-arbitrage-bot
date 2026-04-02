@@ -1,8 +1,9 @@
-# Polymarket Market Maker Bot
+# Polymarket Trading Bot 
+## Market Maker, Liquidity, Copy Trading & Automated Trading Engine
 
-Production-grade **Polymarket CLOB** market-making bot with optimized inventory management, spread farming, intelligent cancel/replace cycles, and automated risk controls.
+Production-ready **Polymarket trading bot** designed for **market making, liquidity provision, spread capture, and automated trading** on the Polymarket CLOB (Central Limit Order Book).
 
-Built in **TypeScript on Node.js 20+**. It is aimed at market makers who want balanced exposure, efficient quote placement, and strong spread capture on Polymarket prediction markets.
+Built with **TypeScript (Node.js 20+)**, this bot helps traders and developers implement professional **algorithmic trading strategies** on Polymarket prediction markets.
 
 ---
 
@@ -310,6 +311,24 @@ Suited to: professional market makers, systematic traders, and builders who want
 - ML-assisted sizing
 - Portfolio-level risk across markets
 - Deeper fill and position sync from user channel / trades feed
+
+---
+
+Optimized for:
+
+* Polymarket market maker bot strategies
+* automated trading on prediction markets
+* liquidity provision bots
+* spread capture trading
+* systematic trading infrastructure
+* Polymarket copy trading extensions
+* high-frequency quote refresh strategies
+
+---
+
+## Keywords (SEO)
+
+polymarket trading bot, polymarket market maker bot, polymarket liquidity bot, polymarket clob bot, polymarket automated trading bot, polymarket market making strategy, prediction market trading bot, polymarket algorithmic trading, polymarket API trading bot, polymarket copy trading bot, crypto prediction market bot
 
 ---
 
