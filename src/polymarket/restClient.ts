@@ -1,85 +1,131 @@
 import type { Settings } from "../config.js";
 import type { Logger } from "../logger.js";
+import type { MarketSnapshot } from "../arbitrage/evaluator.js";
+
+interface TokenInfo {
+  token_id: string;
+  outcome: string;
+  price: string | number;
+}
+
+interface MarketInfo {
+  condition_id: string;
+  question: string;
+  end_date_iso: string;
+  tokens: TokenInfo[];
+}
+
+interface BookLevel {
+  price: string;
+  size: string;
+}
+
+interface OrderbookResponse {
+  asks: BookLevel[];
+  bids: BookLevel[];
+}
 
 export class PolymarketRestClient {
-  private readonly baseUrl: string;
+  private readonly base: string;
 
   constructor(
     private readonly settings: Settings,
     private readonly log: Logger,
   ) {
-    this.baseUrl = settings.polymarketApiUrl.replace(/\/$/, "");
+    this.base = settings.polymarketApiUrl.replace(/\/$/, "");
   }
 
-  async getMarkets(active = true, closed = false): Promise<Record<string, unknown>[]> {
+  private async get<T>(path: string): Promise<T> {
+    const res = await fetch(`${this.base}${path}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`GET ${path} → HTTP ${res.status}`);
+    return res.json() as Promise<T>;
+  }
+
+  /**
+   * Fetch a complete MarketSnapshot for one market:
+   *   1. GET /markets/{id}  → token IDs, end time, question (for beat price)
+   *   2. GET /book?token_id= for each token → best ask prices
+   */
+  async fetchMarketSnapshot(marketId: string): Promise<MarketSnapshot> {
+    const info = await this.get<MarketInfo>(`/markets/${marketId}`);
+
+    // Identify UP and DOWN tokens by outcome label
+    const upToken   = info.tokens.find((t) => /^(up|yes)$/i.test(t.outcome.trim()));
+    const downToken = info.tokens.find((t) => /^(down|no)$/i.test(t.outcome.trim()));
+
+    if (!upToken || !downToken) {
+      const labels = info.tokens.map((t) => t.outcome).join(", ");
+      throw new Error(`Market ${marketId}: cannot identify UP/DOWN tokens. Found: [${labels}]`);
+    }
+
+    const beatPrice = parseBeatPrice(info.question);
+    if (beatPrice === null) {
+      throw new Error(`Market ${marketId}: no beat price in question: "${info.question}"`);
+    }
+
+    // Fetch orderbooks for both tokens in parallel to get best ask
+    const [upBook, downBook] = await Promise.all([
+      this.get<OrderbookResponse>(`/book?token_id=${upToken.token_id}`).catch(() => null),
+      this.get<OrderbookResponse>(`/book?token_id=${downToken.token_id}`).catch(() => null),
+    ]);
+
+    const priceUp   = bestAsk(upBook,   Number(upToken.price));
+    const priceDown = bestAsk(downBook, Number(downToken.price));
+
+    this.log.debug({
+      marketId,
+      beatPrice,
+      priceUp,
+      priceDown,
+      endTime: info.end_date_iso,
+    }, "snapshot_fetched");
+
+    return {
+      marketId,
+      beatPrice,
+      priceUp,
+      priceDown,
+      endTime:    info.end_date_iso,
+      tokenIdUp:  upToken.token_id,
+      tokenIdDown: downToken.token_id,
+      capturedAt: Date.now(),
+    };
+  }
+
+  /** Fetch positions that are redeemable for a given wallet address. */
+  async getRedeemablePositions(address: string): Promise<Record<string, unknown>[]> {
     try {
-      const params = new URLSearchParams({
-        active: String(active).toLowerCase(),
-        closed: String(closed).toLowerCase(),
+      const params = new URLSearchParams({ user: address, redeemable: "true" });
+      const res = await fetch(`${this.base}/positions?${params}`, {
+        signal: AbortSignal.timeout(10_000),
       });
-      const res = await fetch(`${this.baseUrl}/markets?${params}`);
-      if (!res.ok) throw new Error(`markets ${res.status}`);
-      const body: unknown = await res.json();
-      if (Array.isArray(body)) return body as Record<string, unknown>[];
-      if (body && typeof body === "object" && "data" in body && Array.isArray((body as { data: unknown }).data)) {
-        return (body as { data: Record<string, unknown>[] }).data;
-      }
-      if (body && typeof body === "object" && "markets" in body && Array.isArray((body as { markets: unknown }).markets)) {
-        return (body as { markets: Record<string, unknown>[] }).markets;
-      }
-      this.log.warn({ body_type: typeof body }, "markets_unexpected_shape");
+      if (!res.ok) return [];
+      return res.json() as Promise<Record<string, unknown>[]>;
+    } catch {
       return [];
-    } catch (e) {
-      this.log.error({ err: e }, "markets_fetch_failed");
-      throw e;
     }
   }
+}
 
-  async getOrderbook(marketId: string): Promise<Record<string, unknown>> {
-    try {
-      const params = new URLSearchParams({ market: marketId });
-      const res = await fetch(`${this.baseUrl}/book?${params}`);
-      if (!res.ok) throw new Error(`orderbook ${res.status}`);
-      return (await res.json()) as Record<string, unknown>;
-    } catch (e) {
-      this.log.error({ err: e, market_id: marketId }, "orderbook_fetch_failed");
-      throw e;
-    }
-  }
+/** Extract the BTC beat price from a market question string.
+ *  Handles formats like "$67,000", "$67000", "$67,500.50"
+ */
+function parseBeatPrice(question: string): number | null {
+  const match = question.match(/\$\s*([\d,]+(?:\.\d+)?)/);
+  if (!match) return null;
+  const val = parseFloat(match[1].replace(/,/g, ""));
+  return isNaN(val) ? null : val;
+}
 
-  async getMarketInfo(marketId: string): Promise<Record<string, unknown>> {
-    try {
-      const res = await fetch(`${this.baseUrl}/markets/${marketId}`);
-      if (!res.ok) throw new Error(`market_info ${res.status}`);
-      return (await res.json()) as Record<string, unknown>;
-    } catch (e) {
-      this.log.error({ err: e, market_id: marketId }, "market_info_fetch_failed");
-      throw e;
-    }
+/** Return the best ask price from an orderbook response,
+ *  falling back to the token's own price field if no asks available.
+ */
+function bestAsk(book: OrderbookResponse | null, fallback: number): number {
+  if (book?.asks?.length) {
+    const p = parseFloat(book.asks[0].price);
+    if (!isNaN(p) && p > 0) return p;
   }
-
-  async getBalances(address: string): Promise<Record<string, unknown>> {
-    try {
-      const params = new URLSearchParams({ user: address });
-      const res = await fetch(`${this.baseUrl}/balances?${params}`);
-      if (!res.ok) throw new Error(`balances ${res.status}`);
-      return (await res.json()) as Record<string, unknown>;
-    } catch (e) {
-      this.log.error({ err: e, address }, "balances_fetch_failed");
-      throw e;
-    }
-  }
-
-  async getOpenOrders(address: string, marketId?: string): Promise<Record<string, unknown>[]> {
-    try {
-      const params = new URLSearchParams({ user: address });
-      if (marketId) params.set("market", marketId);
-      const res = await fetch(`${this.baseUrl}/open-orders?${params}`);
-      if (!res.ok) throw new Error(`open_orders ${res.status}`);
-      return (await res.json()) as Record<string, unknown>[];
-    } catch (e) {
-      this.log.error({ err: e, address }, "open_orders_fetch_failed");
-      throw e;
-    }
-  }
+  return fallback > 0 ? fallback : 0.5;
 }

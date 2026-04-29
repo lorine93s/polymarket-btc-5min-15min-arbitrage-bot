@@ -1,260 +1,250 @@
 import type { Settings } from "./config.js";
 import type { Logger } from "./logger.js";
-import { OrderExecutor } from "./execution/orderExecutor.js";
-import { InventoryManager } from "./inventory/inventoryManager.js";
-import { QuoteEngine, type Quote } from "./marketMaker/quoteEngine.js";
-import { OrderSigner } from "./polymarket/orderSigner.js";
 import { PolymarketRestClient } from "./polymarket/restClient.js";
-import { PolymarketWebSocketClient } from "./polymarket/websocketClient.js";
-import { RiskManager } from "./risk/riskManager.js";
+import { OrderSigner } from "./polymarket/orderSigner.js";
+import { OrderExecutor } from "./execution/orderExecutor.js";
 import { AutoRedeem } from "./services/autoRedeem.js";
+import { evaluate, type MarketSnapshot, type ArbOpportunity } from "./arbitrage/evaluator.js";
 
-export class MarketMakerBot {
-  running = false;
-  private readonly restClient: PolymarketRestClient;
-  private readonly wsClient: PolymarketWebSocketClient;
-  private readonly orderSigner: OrderSigner;
-  private readonly orderExecutor: OrderExecutor;
-  private readonly inventoryManager: InventoryManager;
-  private readonly riskManager: RiskManager;
-  private readonly quoteEngine: QuoteEngine;
-  private readonly autoRedeem: AutoRedeem;
+export class ArbBot {
+  private running = false;
+  private dailyTradeCount = 0;
+  private totalExposureUsd = 0;
+  private lastResetDate = new Date().toDateString();
 
-  private currentOrderbook: Record<string, unknown> = {};
-  private lastQuoteTime = 0;
+  private readonly rest: PolymarketRestClient;
+  private readonly signer: OrderSigner;
+  private readonly executor: OrderExecutor;
+  private readonly redeemer: AutoRedeem;
 
   constructor(
     private readonly settings: Settings,
     private readonly log: Logger,
   ) {
-    this.restClient = new PolymarketRestClient(settings, log);
-    this.wsClient = new PolymarketWebSocketClient(settings, log);
-    this.orderSigner = new OrderSigner(settings.privateKey, log);
-    this.orderExecutor = new OrderExecutor(settings, this.orderSigner, log);
-    this.inventoryManager = new InventoryManager(
-      settings.maxExposureUsd,
-      settings.minExposureUsd,
-      settings.targetInventoryBalance,
-      log,
-    );
-    this.riskManager = new RiskManager(settings, this.inventoryManager, log);
-    this.quoteEngine = new QuoteEngine(settings, this.inventoryManager);
-    this.autoRedeem = new AutoRedeem(settings, log);
+    this.rest     = new PolymarketRestClient(settings, log);
+    this.signer   = new OrderSigner(settings.privateKey, log);
+    this.executor = new OrderExecutor(settings, this.signer, log);
+    this.redeemer = new AutoRedeem(settings, log);
   }
 
-  /** Stop quote loops and close the websocket (e.g. SIGINT / SIGTERM). */
   interrupt(): void {
     this.running = false;
-    void this.wsClient.close();
-  }
-
-  async discoverMarket(): Promise<Record<string, unknown> | undefined> {
-    if (!this.settings.marketDiscoveryEnabled) {
-      return this.restClient.getMarketInfo(this.settings.marketId);
-    }
-
-    try {
-      const markets = await this.restClient.getMarkets(true, false);
-      for (const market of markets) {
-        if (String(market.id ?? "") === this.settings.marketId) {
-          this.log.info(
-            { market_id: market.id, question: market.question },
-            "market_discovered",
-          );
-          return market;
-        }
-      }
-      this.log.warn({ market_id: this.settings.marketId }, "market_not_found");
-      return undefined;
-    } catch (e) {
-      this.log.error({ err: e }, "market_discovery_failed");
-      return undefined;
-    }
-  }
-
-  async updateOrderbook(): Promise<void> {
-    try {
-      const orderbook = await this.restClient.getOrderbook(this.settings.marketId);
-      this.currentOrderbook = orderbook;
-    } catch (e) {
-      this.log.error({ err: e }, "orderbook_update_failed");
-    }
-  }
-
-  private async handleOrderbookUpdate(data: Record<string, unknown>): Promise<void> {
-    if (data.market === this.settings.marketId) {
-      const book = data.book;
-      if (book && typeof book === "object") {
-        this.currentOrderbook = book as Record<string, unknown>;
-      }
-    }
-  }
-
-  async refreshQuotes(marketInfo: Record<string, unknown>): Promise<void> {
-    const currentTime = Date.now();
-    const elapsed = currentTime - this.lastQuoteTime;
-    if (elapsed < this.settings.quoteRefreshRateMs) return;
-
-    this.lastQuoteTime = currentTime;
-
-    let orderbook = this.currentOrderbook;
-    if (!orderbook || Object.keys(orderbook).length === 0) {
-      await this.updateOrderbook();
-      orderbook = this.currentOrderbook;
-    }
-
-    const bestBid = Number(orderbook.best_bid ?? 0);
-    const bestAsk = Number(orderbook.best_ask ?? 1);
-
-    if (bestBid <= 0 || bestAsk <= 1) {
-      this.log.warn({ best_bid: bestBid, best_ask: bestAsk }, "invalid_orderbook");
-      return;
-    }
-
-    const yesTokenId = String(marketInfo.yes_token_id ?? "");
-    const noTokenId = String(marketInfo.no_token_id ?? "");
-
-    const [yesQuote, noQuote] = this.quoteEngine.generateQuotes(
-      this.settings.marketId,
-      bestBid,
-      bestAsk,
-      yesTokenId,
-      noTokenId,
-    );
-
-    await this.cancelStaleOrders();
-
-    if (yesQuote) await this.placeQuote(yesQuote, "YES");
-    if (noQuote) await this.placeQuote(noQuote, "NO");
-  }
-
-  private async cancelStaleOrders(): Promise<void> {
-    try {
-      const openOrders = await this.restClient.getOpenOrders(
-        this.orderSigner.getAddress(),
-        this.settings.marketId,
-      );
-
-      const currentTime = Date.now();
-      const orderIdsToCancel: string[] = [];
-
-      for (const order of openOrders) {
-        const orderTime = Number(order.timestamp ?? 0);
-        const age = currentTime - orderTime;
-        if (age > this.settings.orderLifetimeMs) {
-          const id = order.id;
-          if (typeof id === "string") orderIdsToCancel.push(id);
-        }
-      }
-
-      if (orderIdsToCancel.length > 0) {
-        await this.orderExecutor.batchCancelOrders(orderIdsToCancel);
-      }
-    } catch (e) {
-      this.log.error({ err: e }, "stale_order_cancellation_failed");
-    }
-  }
-
-  private async placeQuote(quote: Quote, outcome: string): Promise<void> {
-    const [isValid, reason] = this.riskManager.validateOrder(quote.side, quote.size * quote.price);
-    if (!isValid) {
-      this.log.warn({ reason, outcome }, "quote_rejected");
-      return;
-    }
-
-    try {
-      const order: Record<string, unknown> = {
-        market: quote.market,
-        side: quote.side,
-        size: String(quote.size),
-        price: String(quote.price),
-        token_id: quote.tokenId,
-      };
-
-      const result = await this.orderExecutor.placeOrder(order);
-      this.log.info(
-        {
-          outcome,
-          side: quote.side,
-          price: quote.price,
-          size: quote.size,
-          order_id: result.id,
-        },
-        "quote_placed",
-      );
-    } catch (e) {
-      this.log.error({ err: e, outcome }, "quote_placement_failed");
-    }
-  }
-
-  async runCancelReplaceCycle(marketInfo: Record<string, unknown>): Promise<void> {
-    while (this.running) {
-      try {
-        await this.refreshQuotes(marketInfo);
-        await sleep(this.settings.cancelReplaceIntervalMs / 1000);
-      } catch (e) {
-        this.log.error({ err: e }, "cancel_replace_cycle_error");
-        await sleep(1);
-      }
-    }
-  }
-
-  async runAutoRedeemLoop(): Promise<void> {
-    while (this.running) {
-      try {
-        if (this.settings.autoRedeemEnabled) {
-          await this.autoRedeem.autoRedeemAll(this.orderSigner.getAddress());
-        }
-        await sleep(300);
-      } catch (e) {
-        this.log.error({ err: e }, "auto_redeem_error");
-        await sleep(60);
-      }
-    }
   }
 
   async run(): Promise<void> {
     this.running = true;
-    this.log.info({ market_id: this.settings.marketId }, "market_maker_starting");
+    this.log.info(
+      {
+        wallet:     this.signer.getAddress(),
+        market_5m:  this.settings.marketId5m,
+        market_15m: this.settings.marketId15m,
+        threshold:  this.settings.arbThreshold,
+        size:       this.settings.defaultSize,
+      },
+      "arb_bot_starting",
+    );
 
-    const marketInfo = await this.discoverMarket();
-    if (!marketInfo) {
-      this.log.error("market_not_available");
+    void this.runRedeemLoop();
+
+    while (this.running) {
+      try {
+        this.resetDailyCountIfNeeded();
+        await this.tick();
+      } catch (e) {
+        this.log.error({ err: e }, "tick_error");
+      }
+      await sleep(this.settings.pollIntervalMs);
+    }
+
+    this.log.info("arb_bot_stopped");
+  }
+
+  // ── Core evaluation loop ────────────────────────────────────────────────
+
+  private async tick(): Promise<void> {
+    let snap5m: MarketSnapshot;
+    let snap15m: MarketSnapshot;
+
+    try {
+      [snap5m, snap15m] = await Promise.all([
+        this.rest.fetchMarketSnapshot(this.settings.marketId5m),
+        this.rest.fetchMarketSnapshot(this.settings.marketId15m),
+      ]);
+    } catch (e) {
+      this.log.warn({ err: e }, "snapshot_fetch_failed");
       return;
     }
 
-    await this.updateOrderbook();
+    const synced = snap5m.endTime === snap15m.endTime;
 
-    if (this.settings.marketDiscoveryEnabled) {
-      await this.wsClient.connect();
-      await this.wsClient.subscribeOrderbook(this.settings.marketId);
-      this.wsClient.registerHandler("l2_book_update", (data) => this.handleOrderbookUpdate(data));
+    this.log.debug({
+      synced,
+      endTime: snap5m.endTime,
+      bp5m:    snap5m.beatPrice,
+      bp15m:   snap15m.beatPrice,
+      up5m:    snap5m.priceUp.toFixed(4),
+      dn5m:    snap5m.priceDown.toFixed(4),
+      up15m:   snap15m.priceUp.toFixed(4),
+      dn15m:   snap15m.priceDown.toFixed(4),
+    }, "tick");
+
+    if (!synced) {
+      this.log.debug({ end5m: snap5m.endTime, end15m: snap15m.endTime }, "endtime_mismatch_skipping");
+      return;
     }
 
-    const tasks: Promise<void>[] = [
-      this.runCancelReplaceCycle(marketInfo),
-      this.runAutoRedeemLoop(),
-    ];
+    const opp = evaluate(
+      snap5m,
+      snap15m,
+      this.settings.arbThreshold,
+      this.settings.staleDataMaxAgeMs,
+    );
 
-    if (this.wsClient.running) {
-      tasks.push(this.wsClient.listen());
+    if (!opp) {
+      this.log.debug(
+        {
+          costAB: (snap5m.priceUp + snap15m.priceDown).toFixed(4),
+          costBA: (snap15m.priceUp + snap5m.priceDown).toFixed(4),
+          threshold: this.settings.arbThreshold,
+        },
+        "no_arb_opportunity",
+      );
+      return;
     }
 
-    try {
-      await Promise.all(tasks);
-    } finally {
-      await this.cleanup();
+    this.log.info({
+      case:          opp.case,
+      combined_cost: opp.combinedCost.toFixed(4),
+      profit_est:    opp.expectedProfit.toFixed(4),
+      threshold:     this.settings.arbThreshold,
+      bp5m:          snap5m.beatPrice,
+      bp15m:         snap15m.beatPrice,
+    }, "arb_opportunity_detected");
+
+    if (!this.canTrade()) return;
+
+    await this.executeArb(opp);
+  }
+
+  // ── Risk guards ─────────────────────────────────────────────────────────
+
+  private canTrade(): boolean {
+    if (this.dailyTradeCount >= this.settings.maxDailyTrades) {
+      this.log.warn(
+        { count: this.dailyTradeCount, max: this.settings.maxDailyTrades },
+        "daily_trade_limit_reached",
+      );
+      return false;
+    }
+    if (this.totalExposureUsd >= this.settings.maxExposureUsd) {
+      this.log.warn(
+        { exposure: this.totalExposureUsd, max: this.settings.maxExposureUsd },
+        "max_exposure_reached",
+      );
+      return false;
+    }
+    return true;
+  }
+
+  // ── Dual-leg execution ──────────────────────────────────────────────────
+
+  private async executeArb(opp: ArbOpportunity): Promise<void> {
+    const size = String(this.settings.defaultSize);
+
+    const leg1 = {
+      market:   opp.leg1MarketId,
+      token_id: opp.leg1TokenId,
+      side:     "BUY",
+      size,
+      price:    String(opp.leg1Price),
+    };
+    const leg2 = {
+      market:   opp.leg2MarketId,
+      token_id: opp.leg2TokenId,
+      side:     "BUY",
+      size,
+      price:    String(opp.leg2Price),
+    };
+
+    this.log.info({
+      case: opp.case,
+      leg1: { market: opp.leg1MarketId, dir: opp.leg1Direction, price: opp.leg1Price },
+      leg2: { market: opp.leg2MarketId, dir: opp.leg2Direction, price: opp.leg2Price },
+      size: this.settings.defaultSize,
+    }, "executing_arb_trade");
+
+    const start = Date.now();
+
+    const [res1, res2] = await Promise.all([
+      this.executor.placeOrder(leg1).catch((e) => {
+        this.log.error({ err: e }, "leg1_order_failed");
+        return null;
+      }),
+      this.executor.placeOrder(leg2).catch((e) => {
+        this.log.error({ err: e }, "leg2_order_failed");
+        return null;
+      }),
+    ]);
+
+    const latencyMs = Date.now() - start;
+    const leg1Ok = res1 !== null;
+    const leg2Ok = res2 !== null;
+
+    if (leg1Ok && leg2Ok) {
+      this.dailyTradeCount++;
+      this.totalExposureUsd += this.settings.defaultSize * 2;
+      this.log.info({
+        case:        opp.case,
+        leg1_id:     (res1 as Record<string, unknown>).id,
+        leg2_id:     (res2 as Record<string, unknown>).id,
+        latency_ms:  latencyMs,
+        daily_count: this.dailyTradeCount,
+        exposure_usd: this.totalExposureUsd,
+      }, "arb_trade_complete");
+    } else if (leg1Ok && !leg2Ok) {
+      this.log.warn({
+        leg1_id: (res1 as Record<string, unknown>).id,
+        case: opp.case,
+      }, "leg2_failed_directional_exposure_open");
+    } else if (!leg1Ok && leg2Ok) {
+      this.log.warn({
+        leg2_id: (res2 as Record<string, unknown>).id,
+        case: opp.case,
+      }, "leg1_failed_directional_exposure_open");
+    } else {
+      this.log.error({ case: opp.case }, "both_legs_failed");
     }
   }
 
-  async cleanup(): Promise<void> {
-    this.running = false;
-    await this.orderExecutor.cancelAllOrders(this.settings.marketId);
-    await this.wsClient.close();
-    this.log.info("market_maker_shutdown_complete");
+  // ── Background redeem loop ──────────────────────────────────────────────
+
+  private async runRedeemLoop(): Promise<void> {
+    while (this.running) {
+      await sleep(300_000); // check every 5 minutes
+      if (!this.running) break;
+      try {
+        if (this.settings.autoRedeemEnabled) {
+          await this.redeemer.autoRedeemAll(this.signer.getAddress());
+        }
+      } catch (e) {
+        this.log.error({ err: e }, "redeem_loop_error");
+      }
+    }
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────────────
+
+  private resetDailyCountIfNeeded(): void {
+    const today = new Date().toDateString();
+    if (today !== this.lastResetDate) {
+      this.dailyTradeCount  = 0;
+      this.totalExposureUsd = 0;
+      this.lastResetDate    = today;
+      this.log.info("daily_counters_reset");
+    }
   }
 }
 
-function sleep(seconds: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, seconds * 1000));
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }

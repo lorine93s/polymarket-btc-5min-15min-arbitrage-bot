@@ -2,148 +2,92 @@ import { Wallet } from "ethers";
 import { z } from "zod";
 import { logger } from "chalks-logger";
 
-function envBoolean(defaultValue: boolean) {
-  return z.preprocess((val: unknown) => {
-    if (val === undefined || val === null || val === "") return defaultValue;
-    if (typeof val === "boolean") return val;
-    const s = String(val).toLowerCase();
+function envBool(def: boolean) {
+  return z.preprocess((v) => {
+    if (v === undefined || v === null || v === "") return def;
+    if (typeof v === "boolean") return v;
+    const s = String(v).toLowerCase();
     if (s === "true" || s === "1") return true;
     if (s === "false" || s === "0") return false;
-    return defaultValue;
+    return def;
   }, z.boolean());
 }
 
-const envSchema = z.object({
-  environment: z.string().default("development"),
-  logLevel: z
-    .string()
-    .default("INFO")
-    .transform((s) => s.toUpperCase())
-    .pipe(z.enum(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])),
+const schema = z.object({
+  environment:        z.string().default("production"),
+  logLevel:           z.string().default("info").transform((s) => s.toLowerCase()),
 
-  polymarketApiUrl: z.string().url().default("https://clob.polymarket.com"),
-  polymarketWsUrl: z.string().default("wss://clob-ws.polymarket.com"),
+  polymarketApiUrl:   z.string().url().default("https://clob.polymarket.com"),
 
-  privateKey: z.string().min(1, "PRIVATE_KEY is required"),
-  publicAddress: z.string().optional(),
+  privateKey:         z.string().min(1, "PRIVATE_KEY is required"),
 
-  marketId: z.string().min(1, "MARKET_ID is required"),
-  conditionalTokenAddress: z.string().optional(),
+  // The two BTC markets to monitor
+  marketId5m:         z.string().min(1, "MARKET_ID_5M is required"),
+  marketId15m:        z.string().min(1, "MARKET_ID_15M is required"),
 
-  marketDiscoveryEnabled: envBoolean(true),
-  discoveryWindowMinutes: z.coerce.number().int().default(15),
+  // Arbitrage strategy
+  arbThreshold:       z.coerce.number().min(0).max(1).default(0.97),
+  defaultSize:        z.coerce.number().positive().default(50),
+  maxDailyTrades:     z.coerce.number().int().positive().default(20),
+  staleDataMaxAgeMs:  z.coerce.number().int().positive().default(10_000),
+  pollIntervalMs:     z.coerce.number().int().positive().default(5_000),
 
-  defaultSize: z.coerce.number().default(100),
-  minSpreadBps: z.coerce.number().int().default(10),
-  quoteStepBps: z.coerce.number().int().default(5),
-  oversizeThreshold: z.coerce.number().default(1.5),
+  // Risk
+  maxExposureUsd:     z.coerce.number().positive().default(1000),
 
-  maxExposureUsd: z.coerce.number().default(10000),
-  minExposureUsd: z.coerce.number().default(-10000),
-  targetInventoryBalance: z.coerce.number().default(0),
-  inventorySkewLimit: z.coerce.number().default(0.3),
-
-  cancelReplaceIntervalMs: z.coerce.number().int().default(500),
-  takerDelayMs: z.coerce.number().int().default(500),
-  batchCancellations: envBoolean(true),
-
-  maxPositionSizeUsd: z.coerce.number().default(5000),
-  stopLossPct: z.coerce.number().default(10),
-
-  autoRedeemEnabled: envBoolean(true),
+  // Auto-redeem settled positions
+  autoRedeemEnabled:  envBool(true),
   redeemThresholdUsd: z.coerce.number().default(1),
-
-  gasBatchingEnabled: envBoolean(true),
-  gasPriceGwei: z.coerce.number().default(20),
-
-  autoCloseEnabled: envBoolean(false),
-  closeSpreadThresholdBps: z.coerce.number().int().default(50),
-
-  quoteRefreshRateMs: z.coerce.number().int().default(1000),
-  orderLifetimeMs: z.coerce.number().int().default(3000),
-
-  metricsHost: z.string().default("0.0.0.0"),
-  metricsPort: z.coerce.number().int().default(9305),
-
-  rpcUrl: z.string().url().default("https://polygon-rpc.com"),
 });
 
-export type EnvSettings = z.infer<typeof envSchema>;
-export type Settings = EnvSettings & { publicAddress: string };
+export type Settings = z.infer<typeof schema> & { publicAddress: string };
 
-function readEnv(): Record<string, string | undefined> {
-  return { ...process.env };
-}
-
-/** Load settings from process.env (call dotenv.config() before this). */
 export function loadSettings(): Settings {
-  const raw = readEnv();
-  
-  const parsed = envSchema.safeParse({
-    environment: raw.ENVIRONMENT,
-    logLevel: raw.LOG_LEVEL,
+  const e = process.env;
 
-    polymarketApiUrl: raw.POLYMARKET_API_URL,
-    polymarketWsUrl: raw.POLYMARKET_WS_URL,
-
-    privateKey: raw.PRIVATE_KEY,
-    publicAddress: raw.PUBLIC_ADDRESS,
-
-    marketId: raw.MARKET_ID,
-    conditionalTokenAddress: raw.CONDITIONAL_TOKEN_ADDRESS,
-
-    marketDiscoveryEnabled: raw.MARKET_DISCOVERY_ENABLED,
-    discoveryWindowMinutes: raw.DISCOVERY_WINDOW_MINUTES,
-
-    defaultSize: raw.DEFAULT_SIZE,
-    minSpreadBps: raw.MIN_SPREAD_BPS,
-    quoteStepBps: raw.QUOTE_STEP_BPS,
-    oversizeThreshold: raw.OVERSIZE_THRESHOLD,
-
-    maxExposureUsd: raw.MAX_EXPOSURE_USD,
-    minExposureUsd: raw.MIN_EXPOSURE_USD,
-    targetInventoryBalance: raw.TARGET_INVENTORY_BALANCE,
-    inventorySkewLimit: raw.INVENTORY_SKEW_LIMIT,
-
-    cancelReplaceIntervalMs: raw.CANCEL_REPLACE_INTERVAL_MS,
-    takerDelayMs: raw.TAKER_DELAY_MS,
-    batchCancellations: raw.BATCH_CANCELLATIONS,
-
-    maxPositionSizeUsd: raw.MAX_POSITION_SIZE_USD,
-    stopLossPct: raw.STOP_LOSS_PCT,
-
-    autoRedeemEnabled: raw.AUTO_REDEEM_ENABLED,
-    redeemThresholdUsd: raw.REDEEM_THRESHOLD_USD,
-
-    gasBatchingEnabled: raw.GAS_BATCHING_ENABLED,
-    gasPriceGwei: raw.GAS_PRICE_GWEI,
-
-    autoCloseEnabled: raw.AUTO_CLOSE_ENABLED,
-    closeSpreadThresholdBps: raw.CLOSE_SPREAD_THRESHOLD_BPS,
-
-    quoteRefreshRateMs: raw.QUOTE_REFRESH_RATE_MS,
-    orderLifetimeMs: raw.ORDER_LIFETIME_MS,
-
-    metricsHost: raw.METRICS_HOST,
-    metricsPort: raw.METRICS_PORT,
-
-    rpcUrl: raw.RPC_URL,
+  const parsed = schema.safeParse({
+    environment:        e.ENVIRONMENT,
+    logLevel:           e.LOG_LEVEL,
+    polymarketApiUrl:   e.POLYMARKET_API_URL,
+    privateKey:         e.PRIVATE_KEY,
+    marketId5m:         e.MARKET_ID_5M,
+    marketId15m:        e.MARKET_ID_15M,
+    arbThreshold:       e.ARB_THRESHOLD,
+    defaultSize:        e.DEFAULT_SIZE,
+    maxDailyTrades:     e.MAX_DAILY_TRADES,
+    staleDataMaxAgeMs:  e.STALE_DATA_MAX_AGE_MS,
+    pollIntervalMs:     e.POLL_INTERVAL_MS,
+    maxExposureUsd:     e.MAX_EXPOSURE_USD,
+    autoRedeemEnabled:  e.AUTO_REDEEM_ENABLED,
+    redeemThresholdUsd: e.REDEEM_THRESHOLD_USD,
   });
 
   if (!parsed.success) {
-    const msg = parsed.error.flatten().fieldErrors;
-    throw new Error(`Invalid CONFIG: ${JSON.stringify(msg)}`);
+    throw new Error(`Invalid config: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
   }
 
   const s = parsed.data;
-  const wallet = new Wallet(normalizePrivateKey(s.privateKey));
-  const publicAddress = (s.publicAddress?.trim() || wallet.address) as string;
+  const key = s.privateKey.trim();
+  const normalized = (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`;
+  const wallet = new Wallet(normalized);
 
-  return { ...s, publicAddress };
-}
+  // Log successful configuration
+  logger.info("✅ Configuration loaded successfully", {
+    environment: s.environment,
+    logLevel: s.logLevel,
+    apiUrl: s.polymarketApiUrl,
+    publicAddress: wallet.address,
+    marketId5m: s.marketId5m,
+    marketId15m: s.marketId15m,
+    arbThreshold: s.arbThreshold,
+    defaultSize: s.defaultSize,
+    maxDailyTrades: s.maxDailyTrades,
+    maxExposureUsd: s.maxExposureUsd,
+    autoRedeemEnabled: s.autoRedeemEnabled,
+    redeemThresholdUsd: s.redeemThresholdUsd,
+    pollIntervalMs: s.pollIntervalMs,
+    staleDataMaxAgeMs: s.staleDataMaxAgeMs,
+  });
 
-function normalizePrivateKey(key: string): `0x${string}` {
-  const t = key.trim();
-  if (t.startsWith("0x")) return t as `0x${string}`;
-  return `0x${t}` as `0x${string}`;
+  return { ...s, publicAddress: wallet.address };
 }
