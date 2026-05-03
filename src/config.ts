@@ -1,6 +1,5 @@
 import { Wallet } from "ethers";
 import { z } from "zod";
-import { logger } from "chalks-logger";
 
 function envBool(def: boolean) {
   return z.preprocess((v) => {
@@ -70,24 +69,6 @@ export function loadSettings(): Settings {
   const key = s.privateKey.trim();
   const normalized = (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`;
   const wallet = new Wallet(normalized);
-
-  // Log successful configuration
-  logger.info("✅ Configuration loaded successfully", {
-    environment: s.environment,
-    logLevel: s.logLevel,
-    apiUrl: s.polymarketApiUrl,
-    publicAddress: wallet.address,
-    marketId5m: s.marketId5m,
-    marketId15m: s.marketId15m,
-    arbThreshold: s.arbThreshold,
-    defaultSize: s.defaultSize,
-    maxDailyTrades: s.maxDailyTrades,
-    maxExposureUsd: s.maxExposureUsd,
-    autoRedeemEnabled: s.autoRedeemEnabled,
-    redeemThresholdUsd: s.redeemThresholdUsd,
-    pollIntervalMs: s.pollIntervalMs,
-    staleDataMaxAgeMs: s.staleDataMaxAgeMs,
-  });
 
   return { ...s, publicAddress: wallet.address };
 }
