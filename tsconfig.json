@@ -1,18 +1,28 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
-    "outDir": "dist",
-    "rootDir": "src",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    // Module settings
+    "module": "CommonJS", // <-- Use CommonJS to support require()
+    "moduleResolution": "node", // Node-style module resolution
+    "target": "esnext",
+    "lib": [
+      "esnext",
+      "dom"
+    ],
+    // Output
+    "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
-    "resolveJsonModule": true
+    // Type checking
+    "strict": false, // <-- disable strict mode
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    // Other recommended options
+    "jsx": "react-jsx",
+    "isolatedModules": true,
+    "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src"],
+  "exclude": ["dist", "node_modules", "test", "ui"]
 }

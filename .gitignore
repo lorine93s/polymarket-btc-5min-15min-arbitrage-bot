@@ -1,40 +1,5 @@
-# Dependencies
-node_modules/
-
-# Build output
-dist/
-build/
-
-# TypeScript
-*.tsbuildinfo
-
-# Environment and secrets
+node_modules
 .env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-logs/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE / editor
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Test and coverage
-coverage/
-.nyc_output/
-
-# Tool caches
-.eslintcache
-.prettiercache
-
-# Optional: local npm pack artifacts
-*.tgz
+*-lock.json
+log.txt
+package-lock.json
