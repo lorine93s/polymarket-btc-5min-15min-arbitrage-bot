@@ -1,13 +1,13 @@
 import { ClobClient, SignatureTypeV2 } from "@polymarket/clob-client-v2";
 import { generateMarketSlug } from "./config";
 import type { Coin, MarketConfig, Minutes } from "./types";
-import { CHAIN_ID, FUNDER, getMarket, getPrices, HOST, SIGNATURE_TYPE, SIGNER } from "./services";
 import { getCurrentTime } from "./utils";
 import { describeTradingError } from "./utils/tradingErrorMessage";
 import { loadConfig } from "./config/toml";
 import { logger } from "emojiprint-logger";
 import { Trade } from "./trade";
 import { runWithClobSdkErrorsSuppressed } from "./utils/suppressClobConsole";
+import { validateEnv } from "./config/validateEnv";
 
 loadConfig();
 
@@ -25,9 +25,30 @@ function logStartupBanner() {
 }
 
 async function main() {
-  const signerAddress = SIGNER?.address ?? "unknown";
-
   logStartupBanner();
+
+  const envValidation = validateEnv();
+  if (!envValidation.ok) {
+    logger.warn("⚠️ Missing or invalid environment variables:");
+    for (const msg of envValidation.messages) {
+      logger.warn(`- ${msg}`);
+    }
+    logger.warn("Please update your `.env` file (see `.env.example`) and run again.");
+    process.exit(1);
+  }
+
+  // Delay importing services until env is validated (avoids ethers crashing on bad env).
+  const {
+    CHAIN_ID,
+    FUNDER,
+    getMarket,
+    getPrices,
+    HOST,
+    SIGNATURE_TYPE,
+    SIGNER,
+  } = await import("./services");
+
+  const signerAddress = SIGNER?.address ?? "unknown";
   logger.info(`Public key: ${signerAddress}`);
   logger.info(`Strategy: ${globalThis.__CONFIG__.strategy} | Market: ${marketConfig.coin.toUpperCase()} ${marketConfig.minutes}m | Trade USD: $${globalThis.__CONFIG__.trade_usd}`);
   logger.info("Trend legend: UP 🟢 | DOWN 🔴 | FLAT ⚪");

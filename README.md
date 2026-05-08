@@ -1,9 +1,11 @@
-# Polymarket BTC 5min / 15min Arbitrage Bot
+# Polymarket Trading Bot (BTC 5m / 15m) — CLOB Arbitrage / Automation (TypeScript)
 
-**Professional Polymarket trading bot for short-horizon crypto prediction markets (BTC, ETH, SOL, XRP)** — built with **Node.js 20+** and **TypeScript**.  
-Configure **`5` or `15` minute** windows (and longer periods) via `trade.toml` for workflows commonly searched as *Polymarket 5 minute market bot*, *Polymarket BTC arbitrage bot*, and *Polymarket automated trading bot*.
+**Polymarket trading bot** for short-horizon crypto prediction markets (BTC, ETH, SOL, XRP) — built with **Node.js 20+** and **TypeScript**.
+If you are searching for **“Polymarket trading bot”**, **“Polymarket arbitrage bot”**, **“Polymarket BTC 5 minute bot”**, or **“Polymarket CLOB bot”**, this repo is a practical starting point.
 
-This repository runs **one active Polymarket “Up/Down” market at a time** (selected by coin + period slug), streams prices from Polymarket’s APIs, applies **rule-based entry/exit strategies**, and places orders through the official **`@polymarket/clob-client-v2`** CLOB client. It is a **production-style automation scaffold**: observable logs, retries, cooldowns, and clear operator legends — not a guarantee of risk-free profit.
+This bot trades **Polymarket Up/Down markets** on the **Polymarket CLOB (order book)** using the official **`@polymarket/clob-client-v2`** SDK.
+It runs **one market window at a time** (configured by coin + period, e.g. **BTC 5m** or **BTC 15m**), polls prices, applies **rule-based entry/exit strategies**, and places orders with **retries, cooldowns, and operator-friendly logging**.
+This is **automation scaffolding** for experimentation and operations — **not** a promise of “risk-free arbitrage” profits.
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20.6-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)](https://www.typescriptlang.org/)
@@ -38,7 +40,8 @@ This repository runs **one active Polymarket “Up/Down” market at a time** (s
 - **Auth** — **L1** wallet signing to **derive or create** API credentials, then **L2** authenticated client for balance and orders.
 - **Operator UX** — Startup **banner**, structured logging (**`emojiprint-logger`**), and **trend / position** legends in the console.
 
-If you are looking specifically for a **synchronized 5m + 15m dual-market “beat price” arbitrage** engine with paired legs, that is **not** what this codebase implements today; see [How it differs](#how-it-differs-from-classic-two-window-arbitrage). This bot **does** target the **same product category** people find when searching **Polymarket BTC 5 minute bot**, **Polymarket 15 minute BTC**, and **Polymarket trading bot TypeScript**.
+If you are looking specifically for a **synchronized dual-window (5m + 15m) paired-leg arbitrage engine**, that is **not** what this codebase implements today; see [How it differs](#how-it-differs-from-classic-two-window-arbitrage).
+This repo is still in the same “**Polymarket arbitrage bot / Polymarket trading bot**” category people search for: **Polymarket BTC 5 minute**, **Polymarket BTC 15 minute**, and **Polymarket CLOB trading bot TypeScript**.
 
 ---
 
@@ -100,7 +103,7 @@ You can **run two processes** with two configs (e.g. one `market_period = "5"`, 
 | Entry | `src/index.ts` | Banner, CLOB auth, market loop, `Trade` lifecycle |
 | CLOB / wallet | `src/services/clob.ts` | Host, chain, signer, funder, signature type |
 | Gamma API | `src/services/gamma.ts` | Market metadata by slug |
-| Config | `src/config/toml.ts`, `src/config/env.ts` | Zod-validated `trade.toml`, `.env` |
+| Config | `src/config/toml.ts`, `src/config/env.ts`, `src/config/validateEnv.ts` | Zod-validated `trade.toml`, `.env` (with early startup validation) |
 | Slug | `src/config/slug.ts` | Coin + period → Polymarket slug |
 | Decision | `src/trade/decision.ts` | `trade_1` / `trade_2` branching |
 | Prices | `src/trade/prices.ts` | Quote polling and status lines |
@@ -121,7 +124,7 @@ You can **run two processes** with two configs (e.g. one `market_period = "5"`, 
 ### 1. Clone and install
 
 ```bash
-git clone <your-repo-url> polymarket-btc-5min-15min-arbitrage-bot
+git clone https://github.com/lorine93s/polymarket-btc-5min-15min-arbitrage-bot.git
 cd polymarket-btc-5min-15min-arbitrage-bot
 npm install
 ```
@@ -129,6 +132,7 @@ npm install
 ### 2. Environment
 
 Copy `.env.example` to `.env` and fill in secrets (**never commit `.env`**).
+The bot validates required env values on startup and will show a clear warning if your **private key** or **funder address** is missing/invalid.
 
 ### 3. Strategy and market
 
@@ -162,7 +166,7 @@ npm start
 
 See **`.env.example`** for commented templates.
 
-**Related queries:** *Polymarket API credentials*, *Polymarket CLOB wallet setup*, *Polymarket trading bot environment variables*.
+**Related queries:** *Polymarket API credentials*, *Polymarket CLOB wallet setup*, *Polymarket trading bot environment variables*, *Polymarket private key invalid byteslike*.
 
 ---
 
@@ -227,9 +231,11 @@ Yes — set **`market_coin`** in `trade.toml`.
 
 ---
 
-## Keywords (for search & GitHub discovery)
+## Keywords
 
-`polymarket trading bot`, `polymarket arbitrage bot`, `polymarket btc arbitrage bot`, `polymarket 5min market bot`, `polymarket 5 minute btc`, `polymarket 15 minute btc`, `polymarket btc 5min 15min arbitrage bot`, `polymarket automated trading bot`, `polymarket clob bot`, `polymarket typescript`, `polymarket prediction market bot`, `btc up down polymarket`, `polymarket crypto trading bot`, `polymarket nodejs`
+Common search terms this repo targets:
+
+`polymarket trading bot`, `polymarket arbitrage bot`, `polymarket btc trading bot`, `polymarket btc arbitrage bot`, `polymarket clob bot`, `polymarket clob trading bot`, `polymarket orderbook bot`, `@polymarket/clob-client-v2`, `polymarket api key`, `polymarket market making bot`, `polymarket up down bot`, `polymarket 5 minute bot`, `polymarket 5m btc`, `polymarket 15 minute bot`, `polymarket 15m btc`, `polymarket typescript bot`, `polymarket nodejs bot`, `prediction market trading bot`, `crypto prediction market bot`
 
 ---
 
